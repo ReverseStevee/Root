@@ -1,30 +1,35 @@
 #!/bin/bash
 set -euo pipefail
+
 VM_DIR="$(pwd)/vm"
-IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img  "
+IMG_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
 IMG_FILE="$VM_DIR/ubuntu-image.img"
 UBUNTU_PERSISTENT_DISK="$VM_DIR/persistent.qcow2"
 SEED_FILE="$VM_DIR/seed.iso"
 MEMORY=999G
 CPUS=255
 SSH_PORT=2222
-DISK_SIZE=999999999999999999999999Y
-IMG_SIZE=999999999999999999999999Y
+DISK_SIZE=80G
+IMG_SIZE=20G
 HOSTNAME="ubuntu"
 USERNAME="ubuntu"
 PASSWORD="ubuntu"
-SWAP_SIZE=999999999999999999999999Y
+SWAP_SIZE=99999G
+
 mkdir -p "$VM_DIR"
 cd "$VM_DIR"
 
-# ---------- tool check ----------
+# Tool check
 for cmd in qemu-system-x86_64 qemu-img cloud-localds; do
-    command -v "$cmd" &>/dev/null || { echo "[ERROR] $cmd missing"; exit 1; }
+    if ! command -v $cmd &>/dev/null; then
+        echo "[ERROR] Required command '$cmd' not found."
+        exit 1
+    fi
 done
 
-# ---------- one-time image setup ----------
+# Image setup (skipped if exists)
 if [ ! -f "$IMG_FILE" ]; then
-    echo "[INFO] Downloading Ubuntu Cloud Image..."
+    echo "[INFO] Downloading Ubuntu image..."
     wget "$IMG_URL" -O "$IMG_FILE"
     qemu-img resize "$IMG_FILE" "$DISK_SIZE"
 
@@ -54,27 +59,32 @@ growpart:
   devices: ["/"]
 resize_rootfs: true
 EOF
+
     cat > meta-data <<EOF
 instance-id: iid-local01
 local-hostname: $HOSTNAME
 EOF
+
     cloud-localds "$SEED_FILE" user-data meta-data
 fi
 
-[ -f "$UBUNTU_PERSISTENT_DISK" ] || qemu-img create -f qcow2 "$UBUNTU_PERSISTENT_DISK" "$IMG_SIZE"
-
-# ---------- acceleration ----------
-if [ -e /dev/kvm ]; then
-    ACCEL="-enable-kvm -cpu host"
-else
-    ACCEL="-accel tcg"
+# Persistent disk
+if [ ! -f "$UBUNTU_PERSISTENT_DISK" ]; then
+    qemu-img create -f qcow2 "$UBUNTU_PERSISTENT_DISK" "$IMG_SIZE"
 fi
 
-# ---------- endless restart loop ----------
-while :; do
-    echo "[INFO] Starting VM (username: $USERNAME  password: $PASSWORD) …"
+# Acceleration
+if [ -e /dev/kvm ]; then
+    ACCELERATION_FLAG="-enable-kvm -cpu host"
+else
+    ACCELERATION_FLAG="-accel tcg"
+fi
+
+# Loop forever
+while true; do
+    echo "[INFO] Starting VM..."
     qemu-system-x86_64 \
-        $ACCEL \
+        $ACCELERATION_FLAG \
         -m "$MEMORY" \
         -smp "$CPUS" \
         -drive file="$IMG_FILE",format=qcow2,if=virtio,cache=writeback \
@@ -84,6 +94,6 @@ while :; do
         -device virtio-net-pci,netdev=n0 \
         -netdev user,id=n0,hostfwd=tcp::"$SSH_PORT"-:22 \
         -nographic -serial mon:stdio
-    echo "[INFO] VM exited; restarting in 3 s …"
-    sleep 3
+    echo "[WARN] VM exited. Restarting in 5 seconds..."
+    sleep 5
 done
